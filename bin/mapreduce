@@ -1,0 +1,73 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ "${1-}" == "start" ]]; then
+    # Check if manager or worker already running
+    if pgrep -f mapreduce-manager > /dev/null || pgrep -f mapreduce-worker > /dev/null; then
+        echo "Error: mapreduce-manager is already running"
+        exit 1
+    fi
+
+    # Prepare log directory
+    mkdir -p var/log
+    rm -f var/log/manager.log var/log/worker-6001.log var/log/worker-6002.log
+
+    # Start manager and workers
+    mapreduce-manager --host localhost --port 6000 --logfile var/log/manager.log &
+    sleep 2
+    mapreduce-worker --host localhost --port 6001 --manager-host localhost --manager-port 6000 --logfile var/log/worker-6001.log &
+    mapreduce-worker --host localhost --port 6002 --manager-host localhost --manager-port 6000 --logfile var/log/worker-6002.log &
+
+    echo "starting mapreduce ..."
+elif [[ "${1-}" == "stop" ]]; then
+    # Send shutdown to manager
+    mapreduce-submit --shutdown --host localhost --port 6000 || true
+    sleep 2  # Give time for shutdown
+
+    # Kill Manager if still running
+    if pgrep -f mapreduce-manager > /dev/null; then
+        echo "killing mapreduce manager ..."
+        pkill -f mapreduce-manager || true
+    fi
+
+    # Kill Workers if still running
+    if pgrep -f mapreduce-worker > /dev/null; then
+        echo "killing mapreduce worker ..."
+        pkill -f mapreduce-worker || true
+    fi
+
+    echo "stopping mapreduce ..."
+    exit 0
+elif [[ "${1-}" == "status" ]]; then
+    if pgrep -f mapreduce-manager > /dev/null; then
+        echo "manager running"
+        mgr=1
+    else
+        echo "manager not running"
+        mgr=0
+    fi
+
+    if pgrep -f mapreduce-worker > /dev/null; then
+        echo "workers running"
+        wkr=1
+    else
+        echo "workers not running"
+        wkr=0
+    fi
+
+    # If both manager AND at least one worker are running, exit 0
+    if [[ "$mgr" == "1" && "$wkr" == "1" ]]; then
+        exit 0
+    else
+        exit 1
+    fi
+elif [[ "${1-}" == "restart" ]]; then
+    # Stop first
+    "$0" stop
+    # Then start
+    "$0" start
+    exit 0
+else
+    echo "Usage: $0 start"
+    exit 1
+fi
