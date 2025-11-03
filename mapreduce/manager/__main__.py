@@ -8,17 +8,24 @@ import click
 import mapreduce.utils
 import socket
 import threading
-from utils.network import *
+from mapreduce.utils.network import *
+from mapreduce.utils.utils import *
 
 # Configure logging
 LOGGER = logging.getLogger(__name__)
 
+class WorkerInfo:
+    def __init__(self, host: str, port: int):
+        self.addr = Address(host, port)
+        #TODO: I'm sure we have to add more stuff to this at some point
 
 class Manager:
     """Represent a MapReduce framework Manager node."""
 
     def __init__(self, host, port):
         """Construct a Manager instance and start listening for messages."""
+
+        self.workers = []
 
         # TODO: Is this the right way to do prefix for the temp dir?
         prefix = f"mapreduce-shared-"
@@ -28,6 +35,14 @@ class Manager:
             # Signals dict for shutdown
             # TODO: Is shutdown the only signal?????
             self.signals = {'shutdown': False}
+
+            # Start TCP server thread
+            tcp_thread = threading.Thread(
+                target=tcp_server,
+                args=(host, port, self.signals, self.handle_tcp_func),
+                daemon=True
+            )
+            tcp_thread.start()
 
             # Start UDP heartbeat server thread
             # TODO: Store heartbeats in a python dictionary somewhere
@@ -43,41 +58,14 @@ class Manager:
             fault_thread = threading.Thread(target=self.fault_tolerance_monitor, daemon=True)
             fault_thread.start()
 
-            # Start TCP server thread
-            tcp_thread = threading.Thread(
-                target=tcp_server,
-                args=(host, port, self.signals, self.handle_tcp_func),
-                daemon=True
-            )
-            tcp_thread.start()
-
             LOGGER.info(
                 "Starting manager host=%s port=%s pwd=%s",
                 host, port, os.getcwd(),
             )
-
-            # Main TCP server loop
-            try:
-                while not self.signals.get("shutdown", False):
-                    try:
-                        conn, addr = server_sock.accept()
-                    except KeyboardInterrupt:
-                        break
-                    LOGGER.debug(f"Accepted connection from {addr}")
-                    data = conn.recv(4096)
-                    try:
-                        msg = json.loads(data.decode())
-                        LOGGER.debug("TCP recv\n%s", json.dumps(msg, indent=2))
-                        self.handle_tcp_message(msg, conn)
-                    except json.JSONDecodeError:
-                        LOGGER.warning("Received invalid JSON, ignoring")
-                    finally:
-                        conn.close()
-            except KeyboardInterrupt:
-                LOGGER.info("Manager shutdown requested.")
-            finally:
-                self.signals['shutdown'] = True  # Signal shutdown to threads
-
+            # TODO: Manager must ignore misbehaving Workers who have not yet been acknowledged
+            # Block until signals['shutdown'] is True
+            while not self.signals['shutdown']:
+                time.sleep(0.1)  # Or do other wait logic
             LOGGER.info("Cleaned up tmpdir %s", tmpdir)
 
     # TODO: handler function is supposed to:
@@ -87,12 +75,41 @@ class Manager:
     # Update Manager state as needed
     # Send any necessary responses back to the sender (optional, if required by protocol)
 
+
     # TODO: Implement
-    def handle_tcp_func():
+    def handle_tcp_func(self, msg, conn):
+        if msg.get("message_type") == "register":
+            # Add the worker to the Manager's list with host and port info
+            worker = WorkerInfo(msg["worker_host"], msg["worker_port"])
+            self.workers.append(worker)
+            LOGGER.info(f"Registered worker: {msg['worker_host']}:{msg['worker_port']}")
+            # Send registration acknowledgement back to Worker
+            ack = {"message_type": "register_ack"}
+            conn.send(json.dumps(ack).encode())
+            return
+        elif msg.get("message_type") == "shutdown":
+            # Forward shutdown to all registered workers
+            for worker in self.workers:
+                tcp_client(worker.addr.host, worker.addr.port, {"message_type": "shutdown"})
+            self.signals['shutdown'] = True
+            # Optionally send ack on shutdown request
+            conn.send(json.dumps({"status": "shutting_down"}).encode())
+            LOGGER.info("Manager received shutdown and forwarded to workers.")
+            return
+
+        else:
+            # Handle other messages as needed
+            pass
         
         
     # TODO: Implement
     def handle_udp_func():
+        print("")
+
+    # TODO: Implement
+    def fault_tolerance_monitor(self):
+        while not self.signals.get('shutdown', False):
+            time.sleep(0.5)
         
 
 

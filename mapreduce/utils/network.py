@@ -1,39 +1,23 @@
 import socket
 import json
-from utils import *
+from mapreduce.utils.utils import *
 
 def tcp_server(host, port, signals, handle_func):
-    """Something something TCP Socket Server."""
+    """TCP Socket Server."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-
-        # Bind the socket to the server
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
         sock.listen()
-
-        # Socket accept() will block for a maximum of 1 second.  If you
-        # omit this, it blocks indefinitely, waiting for a connection.
         sock.settimeout(1)
 
         while not signals.get("shutdown", False):
-            # Wait for a connection for 1s.  The socket library avoids consuming
-            # CPU while waiting for a connection.
             try:
                 clientsocket, address = sock.accept()
             except socket.timeout:
                 continue
             print("Connection from", address[0])
-
-            # Socket recv() will block for a maximum of 1 second.  If you omit
-            # this, it blocks indefinitely, waiting for packets.
             clientsocket.settimeout(1)
 
-            # Receive data, one chunk at a time.  If recv() times out before we
-            # can read a chunk, then go back to the top of the loop and try
-            # again.  When the client closes the connection, recv() returns
-            # empty data, which breaks out of the loop.  We make a simplifying
-            # assumption that the client will always cleanly close the
-            # connection.
             with clientsocket:
                 message_chunks = []
                 while True:
@@ -45,16 +29,14 @@ def tcp_server(host, port, signals, handle_func):
                         break
                     message_chunks.append(data)
 
-            # Decode list-of-byte-strings to UTF8 and parse JSON data
-            message_bytes = b''.join(message_chunks)
-            message_str = message_bytes.decode("utf-8")
-
-            try:
-                message_dict = json_to_dict(message_str)
-            except json.JSONDecodeError:
-                continue
-            # TODO: HANDLE FUNC NOT YET DEFINED
-            handle_func(message_dict)
+                message_bytes = b''.join(message_chunks)
+                message_str = message_bytes.decode("utf-8")
+                try:
+                    message_dict = json_to_dict(message_str)
+                except json.JSONDecodeError:
+                    continue
+                # Pass both message and clientsocket
+                handle_func(message_dict, clientsocket)
 
 
 def udp_server(host, port, signals, handle_func):
@@ -91,6 +73,9 @@ def tcp_client(host: str, port: int, message_dict: dict):
         sock.settimeout(2)
         try:
             response_bytes = sock.recv(4096)
+            if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
+                print("No response received.")
+                return None
             response_str = response_bytes.decode("utf-8")
             response_dict = json_to_dict(response_str)
             print("Received:", response_dict)
@@ -110,6 +95,9 @@ def udp_client(host: str, port: int, message_dict: dict):
         sock.settimeout(2)
         try:
             response_bytes = sock.recv(4096)
+            if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
+                print("No response received.")
+                return None
             response_str = response_bytes.decode("utf-8")
             response_dict = json_to_dict(response_str)
             print("Received:", response_dict)

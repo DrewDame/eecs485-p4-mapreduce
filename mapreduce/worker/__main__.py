@@ -7,7 +7,8 @@ import click
 import mapreduce.utils
 import threading
 import socket
-from utils.network import *
+from mapreduce.utils.network import *
+from mapreduce.utils.utils import *
 
 
 # Configure logging
@@ -52,7 +53,6 @@ class Worker:
         )  # Synchronously send the register message and wait for response
 
         # Only start heartbeats after receiving acknowledgment
-        # TODO: Manager must ignore misbehaving Workers who have not yet been acknowledged
         if response and response.get("message_type") == "register_ack":
             LOGGER.info("Received register_ack from manager, starting heartbeats.")
 
@@ -65,6 +65,7 @@ class Worker:
                     }
                     udp_client(manager_host, manager_port, heartbeat_msg)
                     time.sleep(2)
+                
 
             heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
             heartbeat_thread.start()
@@ -72,9 +73,12 @@ class Worker:
             LOGGER.error("Did not receive register_ack from manager. Halting worker startup.")
 
     # TODO: Implement handle_tcp_func
-    def handle_tcp_func(self, msg_dict):
-        # Process incoming TCP messages from manager (tasks, etc.)
-        pass
+    def handle_tcp_func(self, msg_dict, conn):
+        if msg_dict["message_type"] == "shutdown":
+            self.signals['shutdown'] = True
+            # Optionally acknowledge
+            conn.send(b'{"status": "shutting_down"}')
+            return
 
 
 @click.command()
