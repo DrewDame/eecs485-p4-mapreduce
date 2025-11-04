@@ -85,7 +85,8 @@ class Manager:
             LOGGER.info(f"Registered worker: {msg['worker_host']}:{msg['worker_port']}")
             # Send registration acknowledgement back to Worker
             ack = {"message_type": "register_ack"}
-            conn.send(json.dumps(ack).encode())
+            ack_str = dict_to_json(ack)
+            conn.sendall(ack_str.encode('utf-8'))
             return
         elif msg.get("message_type") == "shutdown":
             # Forward shutdown to all registered workers
