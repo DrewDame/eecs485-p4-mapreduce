@@ -24,6 +24,7 @@ class Manager:
 
     def __init__(self, host, port):
         """Construct a Manager instance and start listening for messages."""
+
         self.workers = []
 
         # TODO: Is this the right way to do prefix for the temp dir?
@@ -54,8 +55,8 @@ class Manager:
 
             # (Optional) Fault tolerance monitor thread
             # TODO: use fault thread to analyze worker's heartbeat
-            fault_thread = threading.Thread(target=self.fault_tolerance_monitor, daemon=True)
-            fault_thread.start()
+            # fault_thread = threading.Thread(target=self.fault_tolerance_monitor, daemon=True)
+            # fault_thread.start()
 
             LOGGER.info(
                 "Starting manager host=%s port=%s pwd=%s",
@@ -76,7 +77,7 @@ class Manager:
 
 
     # TODO: Implement
-    def handle_tcp_func(self, msg, conn):
+    def handle_tcp_func(self, msg):
         LOGGER.info(f"Manager received TCP message: {msg}")
         print("IN HANDLE_TCP_FUNC", msg, flush=True)
         if msg.get("message_type") == "register":
@@ -84,20 +85,20 @@ class Manager:
             worker = WorkerInfo(msg["worker_host"], msg["worker_port"])
             self.workers.append(worker)
             LOGGER.info(f"Registered worker: {msg['worker_host']}:{msg['worker_port']}")
-            # Send registration acknowledgement back to Worker
+            # Send registration acknowledgement as a NEW TCP client connection
             ack = {"message_type": "register_ack"}
-            ack_str = dict_to_json({"message_type": "register_ack"}) + '\n'
-            conn.sendall(ack_str.encode('utf-8'))
-            # conn.shutdown(socket.SHUT_WR)   # <-- add this line after sendall
-            LOGGER.info(f"Sent register_ack to worker: {msg['worker_host']}:{msg['worker_port']}")
+            # NEW TCP connection to worker, then close
+            tcp_client(worker.addr.host, worker.addr.port, ack)
+            LOGGER.info(f"Sent register_ack to worker via new client connection: {msg['worker_host']}:{msg['worker_port']}")
             return
         elif msg.get("message_type") == "shutdown":
             # Forward shutdown to all registered workers
+            LOGGER.info("Forwarding shutdown to all workers. %i", len(self.workers))
             for worker in self.workers:
                 tcp_client(worker.addr.host, worker.addr.port, {"message_type": "shutdown"})
             self.signals['shutdown'] = True
             # Optionally send ack on shutdown request
-            conn.send(json.dumps({"status": "shutting_down"}).encode())
+            # conn.send(json.dumps({"status": "shutting_down"}).encode())
             LOGGER.info("Manager received shutdown and forwarded to workers.")
             return
 

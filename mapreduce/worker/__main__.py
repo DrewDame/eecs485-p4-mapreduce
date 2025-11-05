@@ -28,59 +28,50 @@ class Worker:
             "manager_host=%s manager_port=%s",
             manager_host, manager_port,
         )
+        self.host, self.port = host, port
 
         # Shared signals dict for clean shutdown
         self.signals = {'shutdown': False}
+        self.server_ready_event = threading.Event()
 
         # 1. Start TCP server to receive messages & tasks from manager
         tcp_thread = threading.Thread(
             target=tcp_server,
-            args=(host, port, self.signals, self.handle_tcp_func),
+            args=(host, port, self.signals, self.handle_tcp_func, self.server_ready_event),
             daemon=True
         )
         tcp_thread.start()
 
-        # 2. Send registration message to manager via TCP client and wait for ack
+        # 2. Wait until the TCP server is listening
+        self.server_ready_event.wait()   # <------ THIS KEEPS THE SERVER ALIVE!
+
+        # 3. Send registration message to manager via TCP client
         register_msg = {
             "message_type": "register",
             "worker_host": host,
             "worker_port": port,
         }
         print("Worker sending registration...", register_msg)
-        response = tcp_client(
-            manager_host,
-            manager_port,
-            register_msg
-        )  # Synchronously send the register message and wait for response
-        print("Worker tcp_client() returned:", response)
-        LOGGER.info("Response from manager: %s", response)
-        # Only start heartbeats after receiving acknowledgment
-        if response and response.get("message_type") == "register_ack":
-            LOGGER.info("Received register_ack from manager, starting heartbeats.")
+        tcp_client(manager_host, manager_port, register_msg)
 
-            def heartbeat_sender():
-                while not self.signals.get("shutdown", False):
-                    heartbeat_msg = {
-                        "message_type": "heartbeat",
-                        "worker_host": host,
-                        "worker_port": port,
-                    }
-                    udp_client(manager_host, manager_port, heartbeat_msg)
-                    time.sleep(2)
-                
-
-            heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
-            heartbeat_thread.start()
-        else:
-            LOGGER.error("Did not receive register_ack from manager. Halting worker startup.")
+        # 4. Keep worker alive
+        try:
+            while not self.signals.get('shutdown', False):
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.signals['shutdown'] = True
+            tcp_thread.join()
 
     # TODO: Implement handle_tcp_func
-    def handle_tcp_func(self, msg_dict, conn):
+    def handle_tcp_func(self, msg_dict):
+        LOGGER.info("Worker received TCP message: %s", msg_dict)
         if msg_dict["message_type"] == "shutdown":
             self.signals['shutdown'] = True
             # Optionally acknowledge
-            conn.send(b'{"status": "shutting_down"}')
+            # conn.send(b'{"status": "shutting_down"}')
             return
+        elif msg_dict["message_type"] == "register_ack":
+            LOGGER.info("Received register_ack, starting heartbeat thread")
 
 
 @click.command()
