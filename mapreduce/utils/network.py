@@ -1,10 +1,14 @@
 import socket
 import json
+import logging
 from mapreduce.utils.utils import *
+LOGGER = logging.getLogger(__name__)
 
 def tcp_server(host, port, signals, handle_func):
     """TCP Socket Server."""
+    LOGGER.info("Starting TCP1 server on %s:%d", host, port)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        LOGGER.info("Starting TCP2 server on %s:%d", host, port)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
         sock.listen()
@@ -16,11 +20,12 @@ def tcp_server(host, port, signals, handle_func):
             except socket.timeout:
                 continue
             print("Connection from", address[0])
-            clientsocket.settimeout(1)
 
             with clientsocket:
+                LOGGER.info("Accepted connection from %s:%d", address[0], address[1])
                 message_chunks = []
                 while True:
+                    LOGGER.info("Waiting to receive data from %s:%d", address[0], address[1])
                     try:
                         data = clientsocket.recv(4096)
                     except socket.timeout:

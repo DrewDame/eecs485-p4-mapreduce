@@ -24,7 +24,6 @@ class Manager:
 
     def __init__(self, host, port):
         """Construct a Manager instance and start listening for messages."""
-
         self.workers = []
 
         # TODO: Is this the right way to do prefix for the temp dir?
@@ -89,7 +88,7 @@ class Manager:
             ack = {"message_type": "register_ack"}
             ack_str = dict_to_json({"message_type": "register_ack"}) + '\n'
             conn.sendall(ack_str.encode('utf-8'))
-            conn.shutdown(socket.SHUT_WR)   # <-- add this line after sendall
+            # conn.shutdown(socket.SHUT_WR)   # <-- add this line after sendall
             LOGGER.info(f"Sent register_ack to worker: {msg['worker_host']}:{msg['worker_port']}")
             return
         elif msg.get("message_type") == "shutdown":
