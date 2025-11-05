@@ -32,8 +32,10 @@ def tcp_server(host, port, signals, handle_func):
                 message_bytes = b''.join(message_chunks)
                 message_str = message_bytes.decode("utf-8")
                 try:
+                    print("RAW MESSAGE STR:", repr(message_str), flush=True)
                     message_dict = json_to_dict(message_str)
                 except json.JSONDecodeError:
+                    print("JSON DECODE ERROR:", e, "on input:", repr(message_str), flush=True)
                     continue
                 # Pass both message and clientsocket
                 handle_func(message_dict, clientsocket)
@@ -61,28 +63,25 @@ def udp_server(host, port, signals, handle_func):
             handle_func(message_dict)
 
 
-def tcp_client(host: str, port: int, message_dict: dict):
-    """Send dictionary over TCP and (optionally) receive a response."""
+def tcp_client(host, port, message_dict):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
-        # Use your utility function for encoding
-        message_str = dict_to_json(message_dict)
-        sock.sendall(message_str.encode("utf-8"))
-
-        # (Optional) receive a response
-        sock.settimeout(2)
+        sock.sendall((dict_to_json(message_dict) + '\n').encode('utf-8'))
+        sock_file = sock.makefile('r')
+        print("tcp_client: waiting for response...", flush=True)
         try:
-            response_bytes = sock.recv(4096)
-            if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
-                print("No response received.")
+            response_str = sock_file.readline()
+            print("tcp_client: raw response:", repr(response_str), flush=True)
+            if not response_str.strip():
+                print("tcp_client: No response received from manager.", flush=True)
                 return None
-            response_str = response_bytes.decode("utf-8")
             response_dict = json_to_dict(response_str)
-            print("Received:", response_dict)
+            print("tcp_client: parsed response:", response_dict, flush=True)
             return response_dict
-        except socket.timeout:
-            print("No response received.")
+        except Exception as e:
+            print("tcp_client: Exception receiving response:", e, flush=True)
             return None
+
 
 def udp_client(host: str, port: int, message_dict: dict):
     """Send dictionary over UDP and (optionally) receive a response."""

@@ -10,7 +10,9 @@ mapreduce.egg-info/top_level.txt
 mapreduce/manager/__init__.py
 mapreduce/manager/__main__.py
 mapreduce/utils/__init__.py
+mapreduce/utils/network.py
 mapreduce/utils/ordered_dict.py
+mapreduce/utils/utils.py
 mapreduce/worker/__init__.py
 mapreduce/worker/__main__.py
 tests/test_check_submission_files.py

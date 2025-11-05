@@ -490,13 +490,14 @@ class NameChecker(_BasicChecker):
                 # Check classes (TypeVar's are classes so they need to be excluded first)
                 elif isinstance(inferred_assign_type, nodes.ClassDef) or (
                     isinstance(inferred_assign_type, bases.Instance)
-                    and "EnumMeta"
-                    in {
-                        ancestor.name
-                        for ancestor in cast(
-                            InferenceResult, inferred_assign_type
-                        ).mro()
-                    }
+                    and {"EnumMeta", "TypedDict"}.intersection(
+                        {
+                            ancestor.name
+                            for ancestor in cast(
+                                InferenceResult, inferred_assign_type
+                            ).mro()
+                        }
+                    )
                 ):
                     self._check_name("class", node.name, node)
 
@@ -519,19 +520,30 @@ class NameChecker(_BasicChecker):
                         self._check_name("const", node.name, node)
                 else:
                     node_type = "variable"
+                    iattrs = tuple(node.frame().igetattr(node.name))
                     if (
-                        (iattrs := tuple(node.frame().igetattr(node.name)))
-                        and util.Uninferable not in iattrs
-                        and len(iattrs) == 2
-                        and astroid.are_exclusive(*iattrs)
+                        util.Uninferable in iattrs
+                        and self._name_regexps["const"].match(node.name) is not None
+                    ):
+                        return
+                    if (
+                        util.Uninferable not in iattrs
+                        and len(iattrs) > 1
+                        and all(
+                            astroid.are_exclusive(*combo)
+                            for combo in itertools.combinations(iattrs, 2)
+                        )
                     ):
                         node_type = "const"
-                    self._check_name(
-                        node_type,
-                        node.name,
-                        node,
-                        disallowed_check_only=redefines_import,
-                    )
+                    if not self._meets_exception_for_non_consts(
+                        inferred_assign_type, node.name
+                    ):
+                        self._check_name(
+                            node_type,
+                            node.name,
+                            node,
+                            disallowed_check_only=redefines_import,
+                        )
 
         # Check names defined in function scopes
         elif isinstance(frame, nodes.FunctionDef):

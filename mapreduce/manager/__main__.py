@@ -78,6 +78,8 @@ class Manager:
 
     # TODO: Implement
     def handle_tcp_func(self, msg, conn):
+        LOGGER.info(f"Manager received TCP message: {msg}")
+        print("IN HANDLE_TCP_FUNC", msg, flush=True)
         if msg.get("message_type") == "register":
             # Add the worker to the Manager's list with host and port info
             worker = WorkerInfo(msg["worker_host"], msg["worker_port"])
@@ -85,8 +87,10 @@ class Manager:
             LOGGER.info(f"Registered worker: {msg['worker_host']}:{msg['worker_port']}")
             # Send registration acknowledgement back to Worker
             ack = {"message_type": "register_ack"}
-            ack_str = dict_to_json(ack)
+            ack_str = dict_to_json({"message_type": "register_ack"}) + '\n'
             conn.sendall(ack_str.encode('utf-8'))
+            conn.shutdown(socket.SHUT_WR)   # <-- add this line after sendall
+            LOGGER.info(f"Sent register_ack to worker: {msg['worker_host']}:{msg['worker_port']}")
             return
         elif msg.get("message_type") == "shutdown":
             # Forward shutdown to all registered workers

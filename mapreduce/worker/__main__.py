@@ -46,12 +46,14 @@ class Worker:
             "worker_host": host,
             "worker_port": port,
         }
+        print("Worker sending registration...", register_msg)
         response = tcp_client(
             manager_host,
             manager_port,
             register_msg
         )  # Synchronously send the register message and wait for response
-
+        print("Worker tcp_client() returned:", response)
+        LOGGER.info("Response from manager: %s", response)
         # Only start heartbeats after receiving acknowledgment
         if response and response.get("message_type") == "register_ack":
             LOGGER.info("Received register_ack from manager, starting heartbeats.")
