@@ -36,7 +36,7 @@ def tcp_server(host, port, signals, handle_func):
                 except json.JSONDecodeError:
                     continue
                 # Pass both message and clientsocket
-                handle_func(message_dict, clientsocket)
+                handle_func(message_dict)
 
 
 def udp_server(host, port, signals, handle_func):
@@ -69,20 +69,20 @@ def tcp_client(host: str, port: int, message_dict: dict):
         message_str = dict_to_json(message_dict)
         sock.sendall(message_str.encode("utf-8"))
 
-        # (Optional) receive a response
-        sock.settimeout(2)
-        try:
-            response_bytes = sock.recv(4096)
-            if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
-                print("No response received.")
-                return None
-            response_str = response_bytes.decode("utf-8")
-            response_dict = json_to_dict(response_str)
-            print("Received:", response_dict)
-            return response_dict
-        except socket.timeout:
-            print("No response received.")
-            return None
+        # # (Optional) receive a response
+        # sock.settimeout(2)
+        # try:
+        #     response_bytes = sock.recv(4096)
+        #     if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
+        #         print("No response received.")
+        #         return None
+        #     response_str = response_bytes.decode("utf-8")
+        #     response_dict = json_to_dict(response_str)
+        #     print("Received:", response_dict)
+        #     return response_dict
+        # except socket.timeout:
+        #     print("No response received.")
+        # return None
 
 def udp_client(host: str, port: int, message_dict: dict):
     """Send dictionary over UDP and (optionally) receive a response."""
