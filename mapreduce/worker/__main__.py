@@ -103,7 +103,6 @@ class Worker:
                 "worker_host": self.host,
                 "worker_port": self.port,
             }
-            print("DEBUG: sending heartbeat:", msg_dict, flush=True)
             udp_client(self.manager_host, self.manager_port, msg_dict)
             time.sleep(2)
 

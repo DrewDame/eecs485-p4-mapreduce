@@ -76,6 +76,10 @@ def tcp_client(host, port, message_dict):
 def udp_client(host: str, port: int, message_dict: dict):
     """Send dictionary over UDP and (optionally) receive a response."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+
+        # Connect to the UDP socket on server
         sock.connect((host, port))
-        message_str = dict_to_json(message_dict)
-        sock.send(message_str.encode("utf-8"))
+
+        # Send a message
+        message = dict_to_json(message_dict)
+        sock.sendall(message.encode('utf-8'))

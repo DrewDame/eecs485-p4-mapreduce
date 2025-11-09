@@ -91,10 +91,13 @@ def test_heartbeat(mocker):
         mocker.call(socket.AF_INET, socket.SOCK_DGRAM),
         mocker.call().__enter__().connect(("localhost", 6000)),
     ], any_order=True)
+    print("All messages:", all_messages)
 
     # Verify heartbeat messages sent by the Worker
     heartbeat_messages = utils.filter_heartbeat_messages(all_messages)
+    print("Heartbeat messages:", heartbeat_messages)
     for heartbeat_message in heartbeat_messages:
+        print("Heartbeat message:", heartbeat_message)
         assert heartbeat_message == {
             "message_type": "heartbeat",
             "worker_host": "localhost",
