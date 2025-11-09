@@ -1,19 +1,16 @@
 """MapReduce framework Worker node."""
 import os
 import logging
-import json
 import time
-import click
-import mapreduce.utils
 import threading
-import socket
 import tempfile
 import subprocess
 import shutil
 import hashlib
 import contextlib
-from mapreduce.utils.network import *
-from mapreduce.utils.utils import *
+import click
+from mapreduce.utils.network import tcp_server, tcp_client, udp_client
+from mapreduce.utils.utils import dict_to_json_pretty
 
 
 # Configure logging
@@ -22,10 +19,11 @@ LOGGER = logging.getLogger(__name__)
 
 class Worker:
     """A class representing a Worker node in a MapReduce cluster."""
+
     def __init__(self, host, port, manager_host, manager_port):
         """Construct a Worker instance and start listening for messages."""
-        self._heartbeat_thread = None        # Track thread instance (not the function)
-        self._shutdown_signal = False        # Dedicated flag for heartbeat thread
+        self._heartbeat_thread = None
+        self._shutdown_signal = False
 
         LOGGER.info(
             "Starting worker:%s",
@@ -52,7 +50,7 @@ class Worker:
         tcp_thread.start()
 
         # 2. Wait until the TCP server is listening
-        # self.server_ready_event.wait()   # <------ THIS KEEPS THE SERVER ALIVE!
+        # self.server_ready_event.wait()
 
         # 3. Send registration message to manager via TCP client
         register_msg = {
@@ -70,8 +68,8 @@ class Worker:
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=3)
 
-    # TODO: Implement handle_tcp_func
     def handle_tcp_func(self, msg_dict):
+        """Handle tcp messages received on worker server."""
         LOGGER.debug(f"received\n{dict_to_json_pretty(msg_dict)}")
         if msg_dict["message_type"] == "shutdown":
             self.signals['shutdown'] = True
@@ -79,23 +77,26 @@ class Worker:
             if self._heartbeat_thread:
                 self._heartbeat_thread.join(timeout=3)
             return
-        elif msg_dict["message_type"] == "register_ack":
+        if msg_dict["message_type"] == "register_ack":
             # LOGGER.info("Received register_ack, starting heartbeat thread")
             self.on_register_ack()
             return
-        elif msg_dict["message_type"] == "new_map_task":
+        if msg_dict["message_type"] == "new_map_task":
             self.map_task(msg_dict)
         elif msg_dict["message_type"] == "new_reduce_task":
             self.map_reduce_task(msg_dict)
 
     def on_register_ack(self):
+        """Start heartbeat thread."""
         # Called when Manager sends "register_ack"
-        print("DEBUG: on_register_ack called (Worker starting heartbeat)", flush=True)
+        # print("DEBUG: on_register_ack called
+        # (Worker starting heartbeat)", flush=True)
         t = threading.Thread(target=self.heartbeat_thread, daemon=True)
         t.start()
         self._heartbeat_thread = t
 
     def heartbeat_thread(self):
+        """Send heartbeats every 2 seconds."""
         print("DEBUG: heartbeat thread running")
         while not self._shutdown_signal:
             msg_dict = {
@@ -119,15 +120,22 @@ class Worker:
         prefix = f"mapreduce-local-task{task_id:05d}-"
         with tempfile.TemporaryDirectory(prefix=prefix) as temp_output_dir:
             with contextlib.ExitStack() as stack:
-                # Open all output files with ExitStack (all closed automatically at block exit)
+                # Open all output files with ExitStack
+                # (all closed automatically at block exit)
                 output_files = [
                     stack.enter_context(open(
-                        os.path.join(temp_output_dir, f"maptask{task_id:05d}-part{p:05d}"), "w"
+                        os.path.join(
+                            temp_output_dir,
+                            f"maptask{task_id:05d}-part{p:05d}"
+                        ),
+                        "w",
+                        encoding="utf-8"
                     ))
                     for p in range(num_partitions)
                 ]
 
-                # Run map executable for each input file, partition output lines
+                # Run map executable for each
+                # input file, partition output lines
                 for input_path in input_paths:
                     with open(input_path) as infile:
                         with subprocess.Popen(
@@ -139,15 +147,24 @@ class Worker:
                             for line in proc.stdout:
                                 if not line.strip():
                                     continue
-                                key, value = line.rstrip("\n").split('\t', 1)
-                                keyhash = int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16)
+                                key = line.rstrip("\n").split('\t', 1)[0]
+                                keyhash = int(
+                                    hashlib.md5(key.encode()).hexdigest(),
+                                    16
+                                )
                                 partition_num = keyhash % num_partitions
                                 output_files[partition_num].write(line)
 
             # Step 3: Sort each partition file in place
             for p in range(num_partitions):
-                filename = os.path.join(temp_output_dir, f"maptask{task_id:05d}-part{p:05d}")
-                subprocess.run(["sort", "-o", filename, filename], check=True)
+                filename = os.path.join(
+                    temp_output_dir,
+                    f"maptask{task_id:05d}-part{p:05d}"
+                )
+                subprocess.run(
+                    ["sort", "-o", filename, filename],
+                    check=True
+                )
 
             # Step 4: Move sorted files to shared output dir
             for p in range(num_partitions):
@@ -177,9 +194,9 @@ class Worker:
         with tempfile.TemporaryDirectory(prefix=prefix) as t_dir:
             i_file = f"{t_dir}/reducetask{task_id:05d}-intermediate"
             # Step 1: Merge all input files into one intermediate file
-            with open(i_file, "w") as outfile:
+            with open(i_file, "w", encoding="utf-8") as outfile:
                 for input_path in input_paths:
-                    with open(input_path, "r") as infile:
+                    with open(input_path, "r", encoding="utf-8") as infile:
                         shutil.copyfileobj(infile, outfile)
 
             # Step 2: Sort the intermediate file
@@ -188,7 +205,7 @@ class Worker:
 
             # Step 3: Run reduce executable on sorted intermediate file
             o_f_path = os.path.join(output_path, f"part-{task_id:05d}")
-            with open(s_file, "r") as i, open(o_f_path, "w") as o:
+            with open(s_file, "r", encoding="utf-8") as i, open(o_f_path, "w", encoding="utf-8") as o:
                 with subprocess.Popen(
                     [reduce_executable],
                     stdin=i,

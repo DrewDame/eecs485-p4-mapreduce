@@ -1,7 +1,8 @@
+"""TCP and UDP server and client functions."""
 import socket
 import json
 import logging
-from mapreduce.utils.utils import *
+from mapreduce.utils.utils import json_to_dict, dict_to_json
 LOGGER = logging.getLogger(__name__)
 
 
@@ -45,6 +46,7 @@ def tcp_server(host, port, signals, handle_func):
 
 
 def udp_server(host, port, signals, handle_func):
+    """UDP Socket server."""
     # LOGGER.info("UDP server yay.")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
 
@@ -67,6 +69,7 @@ def udp_server(host, port, signals, handle_func):
 
 
 def tcp_client(host, port, message_dict):
+    """TCP Client message sending."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((host, port))
         msg_str = (dict_to_json(message_dict)).encode('utf-8')
@@ -78,4 +81,4 @@ def udp_client(host: str, port: int, message_dict: dict):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.connect((host, port))
         message_str = dict_to_json(message_dict)
-        sock.send(message_str.encode("utf-8"))
+        sock.sendall(message_str.encode("utf-8"))
