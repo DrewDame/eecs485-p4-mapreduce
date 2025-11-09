@@ -67,7 +67,7 @@ def test_heartbeat(mocker):
             manager_host="localhost",
             manager_port=6000,
         )
-        assert threading.active_count() == 1, "Failed to shutdown threads"
+        assert threading.active_count() == 1, "Failed to shutdown threads" 
     except SystemExit as error:
         assert error.code == 0
 

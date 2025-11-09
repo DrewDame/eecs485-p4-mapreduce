@@ -1,12 +1,16 @@
 import json
 
+
 class Address:
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
 
+
 class Job:
-    def __init__(self, input_dir: str, output_dir: str, mapper_exe: str, reducer_exe: str, num_mappers: int, num_reducers: int, job_id: int, tmp_dir: str):
+    def __init__(self, input_dir: str, output_dir: str, mapper_exe: str,
+                 reducer_exe: str, num_mappers: int, num_reducers: int,
+                 job_id: int, tmp_dir: str):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.mapper_exe = mapper_exe
@@ -22,13 +26,16 @@ class Job:
         self.mapping_is_done = False
         self.reducing_is_done = False
 
+
 class Task:
-    def __init__(self, task_id: int, worker_addr: Address, type: str):
+    def __init__(self, task_id: int, worker_addr, type_in: str):
         self.task_id = task_id
         self.worker_addr = worker_addr
         self.is_completed = False
         self.is_running = False
-        self.type = ""  # "map" or "reduce"
+        self.type = type_in  # "map" or "reduce"
+        self.assigned_time = None
+
 
 class Partition:
     def __init__(self, partition_list, task_id: int):
@@ -37,7 +44,6 @@ class Partition:
 
 # class ReduceTask:
 #     def __init__(self, task_id: int):
-        
 
 
 def dict_to_json(input_dict: dict) -> str:
