@@ -46,26 +46,25 @@ def tcp_server(host, port, signals, handle_func):
 
 
 def udp_server(host, port, signals, handle_func):
-    LOGGER.info("UDP server yay.")
-    # with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    # LOGGER.info("UDP server yay.")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
 
-    #     # Bind the UDP socket to the server
-    #     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    #     sock.bind((host, port))
-    #     sock.settimeout(1)
+        # Bind the UDP socket to the server
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        sock.settimeout(1)
 
-    #     # No sock.listen() since UDP doesn't establish connections like TCP
+        # No sock.listen() since UDP doesn't establish connections like TCP
 
-    #     # Receive incoming UDP messages
-    #     while not signals.get("shutdown", False):
-    #         try:
-    #             message_bytes = sock.recv(4096)
-    #         except socket.timeout:
-    #             continue
-    #         message_str = message_bytes.decode("utf-8")
-    #         message_dict = json_to_dict(message_str)
-    #         # TODO: HANDLE FUNC NOT YET DEFINED
-    #         handle_func(message_dict)
+        # Receive incoming UDP messages
+        while not signals.get("shutdown", False):
+            try:
+                message_bytes = sock.recv(4096)
+            except socket.timeout:
+                continue
+            message_str = message_bytes.decode("utf-8")
+            message_dict = json_to_dict(message_str)
+            handle_func(message_dict)
 
 
 def tcp_client(host, port, message_dict):
@@ -82,17 +81,17 @@ def udp_client(host: str, port: int, message_dict: dict):
         message_str = dict_to_json(message_dict)
         sock.send(message_str.encode("utf-8"))
 
-        # (Optional) receive a response
-        sock.settimeout(2)
-        try:
-            response_bytes = sock.recv(4096)
-            if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
-                print("No response received.")
-                return None
-            response_str = response_bytes.decode("utf-8")
-            response_dict = json_to_dict(response_str)
-            print("Received:", response_dict)
-            return response_dict
-        except socket.timeout:
-            print("No response received.")
-            return None
+        # # (Optional) receive a response
+        # sock.settimeout(2)
+        # try:
+        #     response_bytes = sock.recv(4096)
+        #     if not response_bytes or not isinstance(response_bytes, (bytes, bytearray)):
+        #         print("No response received.")
+        #         return None
+        #     response_str = response_bytes.decode("utf-8")
+        #     response_dict = json_to_dict(response_str)
+        #     print("Received:", response_dict)
+        #     return response_dict
+        # except socket.timeout:
+        #     print("No response received.")
+        #     return None
