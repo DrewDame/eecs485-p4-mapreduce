@@ -2,16 +2,13 @@
 import os
 import tempfile
 import logging
-import json
 import time
 import shutil
-import socket
 import threading
 from collections import defaultdict
 import click
-import mapreduce.utils
 from mapreduce.utils.network import tcp_client, tcp_server, udp_server
-from mapreduce.utils.utils import Address, Job, Task
+from mapreduce.utils.utils import Address, Job, Task, MoreJobInfo
 
 # Configure logging
 LOGGER = logging.getLogger(__name__)
@@ -27,9 +24,26 @@ class WorkerInfo:
         self.is_dead = False
 
     def dummy_method(self):
-        """Use to get past pylint."""
+        """Use to get past."""
         self.is_busy = True
         self.is_busy = False
+
+
+class ManagerLists:
+    """Lists and dicts in Manager class."""
+
+    def __init__(self):
+        """Initialize ManagerLists."""
+        self.workers = []
+        self.worker_heartbeats = {}
+        self.tasks_in_progress = {}
+        self.job_queue = []
+        self.pending_map_tasks = []
+        self.pending_reduce_tasks = []
+
+    def dummy_method(self):
+        """Pass you know what."""
+        LOGGER.info("yay")
 
 
 class Manager:
@@ -37,16 +51,11 @@ class Manager:
 
     def __init__(self, host, port, shared_dir=""):
         """Construct a Manager instance and start listening for messages."""
-        self.workers = []
-        self.worker_heartbeats = {}
-        self.tasks_in_progress = {}
         self.shared_dir = shared_dir
         self.job_id_count = 0
-        self.job_queue = []
         self.job_is_running = False
         self.current_job = None
-        self.pending_map_tasks = []
-        self.pending_reduce_tasks = []
+        self.manager_lists = ManagerLists()
 
         LOGGER.info(
             "Starting manager: %s", port
@@ -54,7 +63,7 @@ class Manager:
         LOGGER.info(
             "PWD %s", os.getcwd()
         )
-        prefix = f"mapreduce-shared-"
+        prefix = "mapreduce-shared-"
         with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
             LOGGER.info("Created %s", tmpdir)
             self.tmpdir = tmpdir
@@ -66,7 +75,7 @@ class Manager:
             tcp_thread = threading.Thread(
                 target=tcp_server,
                 args=(host, port, self.signals, self.handle_tcp_func),
-                daemon=True
+                daemon=True,
             )
             tcp_thread.start()
 
@@ -95,7 +104,7 @@ class Manager:
     def handle_tcp_func(self, msg):
         """Handle tcp messages received on server."""
         if msg.get("message_type") == "register":
-            for worker in self.workers:
+            for worker in self.manager_lists.workers:
                 if worker.addr.host == msg["worker_host"]:
                     if worker.addr.port == msg["worker_port"]:
                         worker.is_dead = False
@@ -105,15 +114,15 @@ class Manager:
                         msg["worker_host"], msg["worker_port"])
             # Add the worker to the Manager's list with host and port info
             worker = WorkerInfo(msg["worker_host"], msg["worker_port"])
-            self.workers.append(worker)
+            self.manager_lists.workers.append(worker)
             # Send registration acknowledgement as a NEW TCP client connection
             ack = {"message_type": "register_ack"}
             # NEW TCP connection to worker, then close
             self.try_tcp(worker.addr.host, worker.addr.port, ack)
             return
-        elif msg.get("message_type") == "shutdown":
+        if msg.get("message_type") == "shutdown":
             # Forward shutdown to all registered workers
-            for worker in self.workers:
+            for worker in self.manager_lists.workers:
                 if not worker.is_dead:
                     self.try_tcp(worker.addr.host,
                                  worker.addr.port,
@@ -122,117 +131,123 @@ class Manager:
             # Optionally send ack on shutdown request
             # conn.send(json.dumps({"status": "shutting_down"}).encode())
             return
-        elif msg.get("message_type") == "new_manager_job":
-            job = Job(msg["input_directory"], msg["output_directory"],
-                      msg["mapper_executable"], msg["reducer_executable"],
-                      msg["num_mappers"], msg["num_reducers"],
-                      self.job_id_count, self.tmpdir)
+        if msg.get("message_type") == "new_manager_job":
+            morejob = MoreJobInfo(msg["input_directory"],
+                                  msg["output_directory"],
+                                  msg["mapper_executable"],
+                                  msg["reducer_executable"],
+                                  self.tmpdir)
+            job = Job(msg["num_mappers"], msg["num_reducers"],
+                      self.job_id_count, morejob)
             self.job_id_count += 1
-            self.job_queue.append(job)
+            self.manager_lists.job_queue.append(job)
             self.start_new_job_if_possible()
             return
-        elif msg.get("message_type") == "finished":
-            worker = None
-            for w in self.workers:
-                h, p = w.addr.host, w.addr.port
-                if msg["worker_host"] == h and msg["worker_port"] == p:
-                    worker = w
-                    break
-            if worker:
-                worker.is_busy = False
-                key = (worker.addr.host, worker.addr.port)
-                if key in self.tasks_in_progress:
-                    del self.tasks_in_progress[key]
+        if msg.get("message_type") == "finished":
+            self.finished_msg(msg)
 
-            # --- MAP PHASE ---
-            if not self.current_job.mapping_is_done:
-                self.current_job.maps_completed_count += 1
+    def finished_msg(self, msg):
+        """Handle finished message."""
+        worker = None
+        for w in self.manager_lists.workers:
+            h, p = w.addr.host, w.addr.port
+            if msg["worker_host"] == h and msg["worker_port"] == p:
+                worker = w
+                break
+        if worker:
+            worker.is_busy = False
+            key = (worker.addr.host, worker.addr.port)
+            if key in self.manager_lists.tasks_in_progress:
+                del self.manager_lists.tasks_in_progress[key]
 
-                # Assign next map task (if any) to this free worker!
-                if self.pending_map_tasks:
-                    next_partition = self.pending_map_tasks.pop(0)
-                    msg_dict = {
-                        "message_type": "new_map_task",
-                        "task_id": next_partition.task_id,
-                        "input_paths": next_partition.input_paths,
-                        "executable": self.current_job.mapper_exe,
-                        "output_directory": self.current_job.tmpdir,
-                        "num_partitions": self.current_job.num_reducers,
-                    }
-                    worker.is_busy = True
-                    next_partition.is_running = True
-                    next_partition.worker_addr = worker.addr
-                    next_partition.assigned_time = time.time()
-                    tup = (worker.addr.host, worker.addr.port)
-                    self.tasks_in_progress[tup] = next_partition
-                    self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
-                    # LOGGER.info(f"Assigning map task {next_partition.task_id}
-                    # to worker {worker.addr.host}:{worker.addr.port}")
+        # --- MAP PHASE ---
+        if not self.current_job.job_status.mapping_is_done:
+            self.current_job.job_status.maps_completed_count += 1
 
-                m = self.current_job.maps_completed_count
-                n = self.current_job.num_partitions
-                if m >= n:
-                    # Start reducing once all maps are done
-                    self.start_reducing(self.current_job)
-                    self.current_job.mapping_is_done = True
+            # Assign next map task (if any) to this free worker!
+            if self.manager_lists.pending_map_tasks:
+                next_partition = self.manager_lists.pending_map_tasks.pop(0)
+                msg_dict = {
+                    "message_type": "new_map_task",
+                    "task_id": next_partition.task_id,
+                    "input_paths": next_partition.input_paths,
+                    "executable": self.current_job.more_job_info.mapper_exe,
+                    "output_directory": self.current_job.more_job_info.tmpdir,
+                    "num_partitions": self.current_job.num_reducers,
+                }
+                worker.is_busy = True
+                next_partition.is_running = True
+                next_partition.worker_addr = worker.addr
+                next_partition.assigned_time = time.time()
+                tup = (worker.addr.host, worker.addr.port)
+                self.manager_lists.tasks_in_progress[tup] = next_partition
+                self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
+                # LOGGER.info(f"Assigning map task {next_partition.task_id}
+                # to worker {worker.addr.host}:{worker.addr.port}")
 
-            # --- REDUCE PHASE ---
-            else:
-                # LOGGER.info(f"Reduce task finished from worker
-                # {worker.addr.host}:{worker.addr.port}")
-                self.current_job.reduces_completed_count += 1
+            m = self.current_job.job_status.maps_completed_count
+            n = self.current_job.job_status.num_partitions
+            if m >= n:
+                # Start reducing once all maps are done
+                self.start_reducing(self.current_job)
+                self.current_job.job_status.mapping_is_done = True
 
-                if self.pending_reduce_tasks:
-                    # LOGGER.info(f"Pending reduce tasks remaining:
-                    # {len(self.pending_reduce_tasks)}")
-                    next_partition = self.pending_reduce_tasks.pop(0)
-                    msg_dict = {
-                        "message_type": "new_reduce_task",
-                        "task_id": next_partition.task_id,
-                        "input_paths": next_partition.input_paths,
-                        "executable": self.current_job.reducer_exe,
-                        "output_directory": self.current_job.output_dir,
-                    }
-                    worker.is_busy = True
-                    next_partition.is_running = True
-                    next_partition.worker_addr = worker.addr
-                    next_partition.assigned_time = time.time()
-                    tup = (worker.addr.host, worker.addr.port)
-                    self.tasks_in_progress[tup] = next_partition
-                    self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
-                    # LOGGER.info(f"Assigning reduce task
-                    # {next_partition.task_id}
-                    # to worker {worker.addr.host}:{worker.addr.port}")
-
-                r = self.current_job.reduces_completed_count
-                n = self.current_job.num_reduce_partitions
-                if r >= n:
-                    self.current_job.reducing_is_done = True
-                    self.job_is_running = False
-                    # Clean up intermediate files
-                    shutil.rmtree(self.current_job.tmpdir)
-                    self.start_new_job_if_possible()
+        # --- REDUCE PHASE ---
         else:
-            # Handle other messages as needed
-            pass
+            # LOGGER.info(f"Reduce task finished from worker
+            # {worker.addr.host}:{worker.addr.port}")
+            self.current_job.job_status.reduces_completed_count += 1
+
+            if self.manager_lists.pending_reduce_tasks:
+                # LOGGER.info(f"Pending reduce tasks remaining:
+                # {len(self.manager_lists.pending_reduce_tasks)}")
+                next_partition = self.manager_lists.pending_reduce_tasks.pop(0)
+                e = self.current_job.more_job_info.reducer_exe
+                o = self.current_job.more_job_info.output_dir
+                msg_dict = {
+                    "message_type": "new_reduce_task",
+                    "task_id": next_partition.task_id,
+                    "input_paths": next_partition.input_paths,
+                    "executable": e,
+                    "output_directory": o,
+                }
+                worker.is_busy = True
+                next_partition.is_running = True
+                next_partition.worker_addr = worker.addr
+                next_partition.assigned_time = time.time()
+                tup = (worker.addr.host, worker.addr.port)
+                self.manager_lists.tasks_in_progress[tup] = next_partition
+                self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
+                # LOGGER.info(f"Assigning reduce task
+                # {next_partition.task_id}
+                # to worker {worker.addr.host}:{worker.addr.port}")
+
+            r = self.current_job.job_status.reduces_completed_count
+            n = self.current_job.job_status.num_reduce_partitions
+            if r >= n:
+                self.current_job.job_status.reducing_is_done = True
+                self.job_is_running = False
+                # Clean up intermediate files
+                shutil.rmtree(self.current_job.more_job_info.tmpdir)
+                self.start_new_job_if_possible()
 
     def handle_udp_func(self, msg_dict):
         """Handle heartbeats received on UDP server."""
         if msg_dict.get("message_type") == "heartbeat":
             key = (msg_dict["worker_host"], msg_dict["worker_port"])
-            self.worker_heartbeats[key] = time.time()
+            self.manager_lists.worker_heartbeats[key] = time.time()
 
     def fault_tolerance_monitor(self):
         """Thread to analyze faults."""
         LOGGER.info("Starting fault tolerance monitor thread")
         while not self.signals.get('shutdown', False):
             now = time.time()
-            for worker in self.workers:
+            for worker in self.manager_lists.workers:
                 if worker.is_dead:
                     continue
                 key = (worker.addr.host, worker.addr.port)
-                last = self.worker_heartbeats.get(key, None)
-                current_task = self.tasks_in_progress.get(key)
+                last = self.manager_lists.worker_heartbeats.get(key, None)
+                current_task = self.manager_lists.tasks_in_progress.get(key)
                 if current_task and current_task.assigned_time:
                     # 1. Mark dead if never got a heartbeat
                     # AND task assigned >10s ago
@@ -240,11 +255,12 @@ class Manager:
                         worker.is_dead = True
                         # LOGGER.warning(f"Worker {key} never sent
                         # heartbeat (>10s), marking dead & reassigning")
+                        c = current_task
                         if current_task.type == "map":
-                            self.pending_map_tasks.append(current_task)
+                            self.manager_lists.pending_map_tasks.append(c)
                         elif current_task.type == "reduce":
-                            self.pending_reduce_tasks.append(current_task)
-                        del self.tasks_in_progress[key]
+                            self.manager_lists.pending_reduce_tasks.append(c)
+                        del self.manager_lists.tasks_in_progress[key]
                         worker.is_busy = False
                         LOGGER.info("Reassigning tasks...")
                         self.assign_pending_tasks()
@@ -255,11 +271,12 @@ class Manager:
                         worker.is_dead = True
                         # LOGGER.warning(f"Worker {key} missed heartbeat
                         # (>10s), marking dead & reassigning")
+                        c = current_task
                         if current_task.type == "map":
-                            self.pending_map_tasks.append(current_task)
+                            self.manager_lists.pending_map_tasks.append(c)
                         elif current_task.type == "reduce":
-                            self.pending_reduce_tasks.append(current_task)
-                        del self.tasks_in_progress[key]
+                            self.manager_lists.pending_reduce_tasks.append(c)
+                        del self.manager_lists.tasks_in_progress[key]
                         worker.is_busy = False
                         LOGGER.info("Reassigning tasks...")
                         self.assign_pending_tasks()
@@ -268,38 +285,40 @@ class Manager:
 
     def start_new_job_if_possible(self):
         """Start new job if possible."""
-        if not self.job_is_running and self.job_queue:
-            job = self.job_queue.pop(0)
+        if not self.job_is_running and self.manager_lists.job_queue:
+            job = self.manager_lists.job_queue.pop(0)
             self.start_job(job)
 
     def start_job(self, job):
         """Start a job now that we know it's possible."""
-        LOGGER.info(f"Starting job {job.job_id}")
+        LOGGER.info("Starting job %s", job.job_id)
         self.job_is_running = True
         self.current_job = job
-        if os.path.exists(job.output_dir):
-            shutil.rmtree(job.output_dir)
+        if os.path.exists(job.more_job_info.output_dir):
+            shutil.rmtree(job.more_job_info.output_dir)
         # output directory for the job
-        job_dir = os.path.join(self.tmpdir, job.output_dir)
+        job_dir = os.path.join(self.tmpdir, job.more_job_info.output_dir)
         os.makedirs(job_dir, exist_ok=True)
 
         # intermediate shared directory for the job
-        job.tmpdir = os.path.join(self.tmpdir, f"job-{job.job_id:05d}")
-        os.makedirs(job.tmpdir, exist_ok=True)
+        tmpdir_name = f"job-{job.job_id:05d}"
+        job.more_job_info.tmpdir = os.path.join(self.tmpdir, tmpdir_name)
+        os.makedirs(job.more_job_info.tmpdir, exist_ok=True)
 
         # partition the input files into num_mappers
         # partitions (returns a list of Task objects)
         tasks = self.partitioning(job)
-        job.num_partitions = len(tasks)
-        LOGGER.info(f"Job {job.job_id} has {job.num_partitions} partitions")
+        job.job_status.num_partitions = len(tasks)
+        LOGGER.info("Job %s has partitions on next line", job.job_id)
+        LOGGER.info(job.job_status.num_partitions)
 
-        self.pending_map_tasks = tasks[:]  # Copy list
+        self.manager_lists.pending_map_tasks = tasks[:]  # Copy list
 
-        for worker in self.workers:
+        for worker in self.manager_lists.workers:
             if worker.is_dead:
                 continue
-            if self.pending_map_tasks and not worker.is_busy:
-                task = self.pending_map_tasks.pop(0)
+            if self.manager_lists.pending_map_tasks and not worker.is_busy:
+                task = self.manager_lists.pending_map_tasks.pop(0)
                 # Assign worker to the task for tracking/fault tolerance
                 task.worker_addr = worker.addr
                 task.is_running = True
@@ -309,13 +328,13 @@ class Manager:
                     "message_type": "new_map_task",
                     "task_id": task.task_id,
                     "input_paths": task.input_paths,
-                    "executable": job.mapper_exe,
-                    "output_directory": job.tmpdir,
+                    "executable": job.more_job_info.mapper_exe,
+                    "output_directory": job.more_job_info.tmpdir,
                     "num_partitions": job.num_reducers,
                 }
                 worker.is_busy = True
                 tup = (worker.addr.host, worker.addr.port)
-                self.tasks_in_progress[tup] = task
+                self.manager_lists.tasks_in_progress[tup] = task
                 self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
                 # LOGGER.info(f"Assigning map task
                 # {task.task_id} to worker {worker.addr
@@ -323,14 +342,14 @@ class Manager:
 
     def partitioning(self, job):
         """Return partitions of the job."""
-        input_files = sorted(os.listdir(job.input_dir))
+        input_files = sorted(os.listdir(job.more_job_info.input_dir))
         partitions_list = [[] for _ in range(job.num_mappers)]
 
         # round-robin partition input files
         for i, fname in enumerate(input_files):
             n = i % job.num_mappers
-            partitions_list[n].append(os.path.join(job.input_dir, fname))
-
+            input_path = os.path.join(job.more_job_info.input_dir, fname)
+            partitions_list[n].append(input_path)
         tasks = []
         for i, partition in enumerate(partitions_list):
             # Create a Task for each partition. No worker assigned yet.
@@ -347,15 +366,16 @@ class Manager:
 
     def start_reducing(self, job):
         """Start the reducing process."""
-        intermediate_files = os.listdir(self.current_job.tmpdir)
+        intermediate_files = os.listdir(self.current_job.more_job_info.tmpdir)
         partitions = defaultdict(list)
         # Group intermediate files by partition number
         for fname in intermediate_files:
             # Assumes filenames like maptask00000-part00001
             parts = fname.split("-")
             n = int(parts[1].replace("part", ""))
-            partitions[n].append(os.path.join(self.current_job.tmpdir, fname))
-
+            t = self.current_job.more_job_info.tmpdir
+            tmp_path = os.path.join(t, fname)
+            partitions[n].append(tmp_path)
         # Create Task objects for each reduce partition
         reduce_tasks = []
         for partition_num, input_paths in partitions.items():
@@ -368,25 +388,27 @@ class Manager:
             task.input_paths = input_paths  # Attach input files to reduce task
             task.assigned_time = time.time()
             reduce_tasks.append(task)
-        self.pending_reduce_tasks = reduce_tasks[:]  # Copy list
-        job.num_reduce_partitions = len(reduce_tasks)
+        self.manager_lists.pending_reduce_tasks = reduce_tasks[:]  # Copy list
+        job.job_status.num_reduce_partitions = len(reduce_tasks)
 
         # Assign reduce tasks to available workers
-        for worker in self.workers:
-            if self.pending_reduce_tasks and not worker.is_busy:
-                task = self.pending_reduce_tasks.pop(0)
+        for worker in self.manager_lists.workers:
+            if self.manager_lists.pending_reduce_tasks and not worker.is_busy:
+                task = self.manager_lists.pending_reduce_tasks.pop(0)
                 task.worker_addr = worker.addr
                 task.is_running = True
+                e = self.current_job.more_job_info.reducer_exe
+                o = self.current_job.more_job_info.output_dir
                 msg_dict = {
                     "message_type": "new_reduce_task",
                     "task_id": task.task_id,
                     "input_paths": task.input_paths,
-                    "executable": self.current_job.reducer_exe,
-                    "output_directory": self.current_job.output_dir,
+                    "executable": e,
+                    "output_directory": o,
                 }
                 worker.is_busy = True
                 tup = (worker.addr.host, worker.addr.port)
-                self.tasks_in_progress[tup] = task
+                self.manager_lists.tasks_in_progress[tup] = task
                 self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)
                 # LOGGER.info(f"Assigning reduce task
                 # {task.task_id} to worker {worker.addr.host}:
@@ -399,25 +421,26 @@ class Manager:
         except ConnectionRefusedError:
             # Find the worker object
             worker = None
-            for w in self.workers:
+            for w in self.manager_lists.workers:
                 if w.addr.host == host and w.addr.port == port:
                     worker = w
                     break
             if not worker:
-                LOGGER.warning(f"Dead worker not found! {host}:{port}")
+                LOGGER.warning("Dead worker not found! %s:%s", host, port)
                 return
             worker.is_dead = True
             # LOGGER.warning(f"Worker {worker.addr.host}:
             # {worker.addr.port} is dead (ConnectionRefusedError)")
             # Reassign unfinished task
             key = Address(worker.addr.host, worker.addr.port)
-            current_task = self.tasks_in_progress.get(key)
+            current_task = self.manager_lists.tasks_in_progress.get(key)
             if current_task:
+                c = current_task
                 if current_task.type == "map":
-                    self.pending_map_tasks.append(current_task)
+                    self.manager_lists.pending_map_tasks.append(c)
                 elif current_task.type == "reduce":
-                    self.pending_reduce_tasks.append(current_task)
-                del self.tasks_in_progress[key]
+                    self.manager_lists.pending_reduce_tasks.append(c)
+                del self.manager_lists.tasks_in_progress[key]
             worker.is_busy = False
             # Try to assign tasks to other workers
             self.assign_pending_tasks()
@@ -425,27 +448,27 @@ class Manager:
     def assign_pending_tasks(self):
         """Assign pending tasks that are currently unassigned."""
         # Try to assign map tasks to available workers
-        LOGGER.info(len(self.workers))
-        for worker in self.workers:
+        LOGGER.info(len(self.manager_lists.workers))
+        for worker in self.manager_lists.workers:
             # LOGGER.info(f"Checking worker {worker.addr.host}
             # :{worker.addr.port} for task assignment")
             if worker.is_dead or worker.is_busy:
-                LOGGER.info(f"dead {worker.addr.host}:{worker.addr.port}")
+                LOGGER.info("dead %s:%s", worker.addr.host, worker.addr.port)
                 continue
-            if self.pending_map_tasks:
+            if self.manager_lists.pending_map_tasks:
                 LOGGER.info("has pending map tasks")
-                next_task = self.pending_map_tasks.pop(0)
+                next_task = self.manager_lists.pending_map_tasks.pop(0)
                 next_task.worker_addr = worker.addr
                 next_task.is_running = True
                 next_task.assigned_time = time.time()
                 tup = (worker.addr.host, worker.addr.port)
-                self.tasks_in_progress[tup] = next_task
+                self.manager_lists.tasks_in_progress[tup] = next_task
                 msg_dict = {
                     "message_type": "new_map_task",
                     "task_id": next_task.task_id,
                     "input_paths": next_task.input_paths,
-                    "executable": self.current_job.mapper_exe,
-                    "output_directory": self.current_job.tmpdir,
+                    "executable": self.current_job.more_job_info.mapper_exe,
+                    "output_directory": self.current_job.more_job_info.tmpdir,
                     "num_partitions": self.current_job.num_reducers,
                 }
                 worker.is_busy = True
@@ -453,18 +476,20 @@ class Manager:
                 # LOGGER.info(f"Reassigned MAP task {next_task.task_id}
                 # -> {worker.addr.host}:{worker.addr.port}")
                 continue
-            if self.pending_reduce_tasks:
-                next_task = self.pending_reduce_tasks.pop(0)
+            if self.manager_lists.pending_reduce_tasks:
+                next_task = self.manager_lists.pending_reduce_tasks.pop(0)
                 next_task.worker_addr = worker.addr
                 next_task.is_running = True
                 tup = (worker.addr.host, worker.addr.port)
-                self.tasks_in_progress[tup] = next_task
+                self.manager_lists.tasks_in_progress[tup] = next_task
+                e = self.current_job.more_job_info.reducer_exe
+                o = self.current_job.more_job_info.output_dir
                 msg_dict = {
                     "message_type": "new_reduce_task",
                     "task_id": next_task.task_id,
                     "input_paths": next_task.input_paths,
-                    "executable": self.current_job.reducer_exe,
-                    "output_directory": self.current_job.output_dir,
+                    "executable": e,
+                    "output_directory": o,
                 }
                 worker.is_busy = True
                 self.try_tcp(worker.addr.host, worker.addr.port, msg_dict)

@@ -17,7 +17,8 @@ def tcp_server(host, port, signals, handle_func):
         sock.settimeout(1)
         while not signals.get("shutdown", False):
             try:
-                clientsocket, address = sock.accept()
+                # clientsocket, address = sock.accept()
+                clientsocket = sock.accept()[0]
             except socket.timeout:
                 continue
             # print("Connection from", address[0])

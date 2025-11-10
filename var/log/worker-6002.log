@@ -1,2 +1,2 @@
-Worker:6002 [INFO] Starting worker host=localhost port=6002 pwd=/home/drewdame/eecs485/eecs485-p4-mapreduce
-Worker:6002 [INFO] manager_host=localhost manager_port=6000
+Worker:6002 [INFO] Starting worker:6002
+Worker:6002 [INFO] PWD /home/becky/EECS_485/p4-mapreduce

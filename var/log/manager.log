@@ -1,1 +1,10 @@
-Manager:6000 [INFO] Starting manager host=localhost port=6000 pwd=/home/drewdame/eecs485/eecs485-p4-mapreduce
+Manager:6000 [INFO] Starting manager: 6000
+Manager:6000 [INFO] PWD /home/becky/EECS_485/p4-mapreduce
+Manager:6000 [INFO] Created /tmp/mapreduce-shared-foi6nm5k
+Manager:6000 [INFO] Starting fault tolerance monitor thread
+Manager:6000 [INFO] Starting job 0
+Manager:6000 [INFO] map
+Manager:6000 [INFO] map
+Manager:6000 [INFO] Job 0 has 2 partitions
+Manager:6000 [INFO] registered worker localhost:6001
+Manager:6000 [INFO] registered worker localhost:6002
